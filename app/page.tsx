@@ -3,8 +3,13 @@
 import { useEffect, useRef, useState } from "react";
 
 const EXPECTED_STREAM_SAMPLE_RATE = 44_100;
+const PRODUCTION_WEBSOCKET_URL =
+  "wss://laugh-handbags-fixtures-grades.trycloudflare.com/audio";
 
 function websocketURLForPage() {
+  if (window.location.protocol === "https:") {
+    return PRODUCTION_WEBSOCKET_URL;
+  }
   return `ws://${window.location.hostname}:8765/audio`;
 }
 
@@ -339,6 +344,7 @@ export default function Home() {
 
       <p>{message}</p>
       <section>
+        <p><code>websocketURL=</code>{websocketURL || "unavailable"}</p>
         {(Object.keys(diagnostics) as Array<keyof Diagnostics>).map((key) => (
           <p key={key}><code>{key}=</code>{diagnostics[key]}</p>
         ))}
