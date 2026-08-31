@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 
 const EXPECTED_STREAM_SAMPLE_RATE = 44_100;
 const PRODUCTION_WEBSOCKET_URL =
-  "wss://laugh-handbags-fixtures-grades.trycloudflare.com/audio";
+  "wss://stream.getaicouncil.app/audio";
 
 function websocketURLForPage() {
   if (window.location.protocol === "https:") {
