@@ -315,6 +315,48 @@ summary {
   gap: 6px;
 }
 
+.music-control-section {
+  display: grid;
+  gap: 12px;
+  margin-top: 8px;
+  padding-top: 20px;
+  border-top: 1px solid rgba(159, 181, 255, 0.14);
+}
+
+.music-control-section h3 {
+  margin: 0;
+  font-size: 1.1rem;
+  line-height: 1.35;
+}
+
+.music-metadata {
+  display: grid;
+  gap: 4px;
+  color: #aeb9d1;
+  font-size: 0.92rem;
+  line-height: 1.4;
+}
+
+.music-playback-state {
+  color: #78e7d2;
+  font-size: 0.8rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: capitalize;
+}
+
+.music-transport {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.music-transport .secondary-button {
+  min-width: 0;
+  padding: 0 8px;
+  font-size: 0.86rem;
+}
+
 .remote-message,
 .remote-error {
   padding: 12px 14px;
@@ -351,6 +393,10 @@ summary {
 
   .connection-badge {
     width: fit-content;
+  }
+
+  .music-transport {
+    gap: 6px;
   }
 }
 

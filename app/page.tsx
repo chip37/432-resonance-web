@@ -599,6 +599,82 @@ export default function Home() {
                   Forget Paired Mac
                 </button>
               </div>
+
+              <section className="music-control-section" aria-labelledby="music-control-title">
+                <p className="section-label">Apple Music</p>
+                <h3 id="music-control-title">
+                  {remoteControl.musicStatus?.running
+                    ? remoteControl.musicStatus.title || "No track selected"
+                    : remoteControl.musicCommand === "refresh"
+                      ? "Checking Music…"
+                      : "Music unavailable"}
+                </h3>
+
+                {remoteControl.musicStatus?.running && (
+                  <div className="music-metadata">
+                    <p>{remoteControl.musicStatus.artist || "Unknown artist"}</p>
+                    <p>{remoteControl.musicStatus.album || "Unknown album"}</p>
+                    <p className="music-playback-state">
+                      {remoteControl.musicStatus.playbackState || "Unknown"}
+                    </p>
+                  </div>
+                )}
+
+                <div className="music-transport">
+                  <button
+                    className="secondary-button"
+                    type="button"
+                    onClick={() => void remoteControl.musicPrevious()}
+                    disabled={
+                      remoteControl.musicCommand !== null ||
+                      !remoteControl.musicStatus?.running
+                    }
+                  >
+                    Previous
+                  </button>
+                  <button
+                    className="secondary-button"
+                    type="button"
+                    onClick={() => void remoteControl.musicPlayPause()}
+                    disabled={
+                      remoteControl.musicCommand !== null ||
+                      !remoteControl.musicStatus?.running
+                    }
+                  >
+                    {remoteControl.musicCommand === "playPause"
+                      ? "Working…"
+                      : remoteControl.musicStatus?.playbackState.toLowerCase() === "playing"
+                        ? "Pause"
+                        : "Play"}
+                  </button>
+                  <button
+                    className="secondary-button"
+                    type="button"
+                    onClick={() => void remoteControl.musicNext()}
+                    disabled={
+                      remoteControl.musicCommand !== null ||
+                      !remoteControl.musicStatus?.running
+                    }
+                  >
+                    Next
+                  </button>
+                </div>
+
+                <button
+                  className="text-button"
+                  type="button"
+                  onClick={() => void remoteControl.refreshMusicStatus()}
+                  disabled={remoteControl.musicCommand !== null}
+                >
+                  {remoteControl.musicCommand === "refresh"
+                    ? "Refreshing…"
+                    : "Refresh Music Status"}
+                </button>
+
+                {remoteControl.musicError && (
+                  <p className="remote-error" role="alert">{remoteControl.musicError}</p>
+                )}
+              </section>
             </div>
           )}
 

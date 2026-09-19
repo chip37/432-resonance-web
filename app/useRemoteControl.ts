@@ -27,6 +27,14 @@ export type MacStatus = {
   notReadyReason: NotReadyReason | null;
 };
 
+export type MusicStatus = {
+  running: boolean;
+  playbackState: string;
+  title: string;
+  artist: string;
+  album: string;
+};
+
 type ControlResponse = {
   version: number;
   id: string;
@@ -43,6 +51,16 @@ type PendingRequest = {
   reject: (error: Error) => void;
   timeout: ReturnType<typeof setTimeout>;
 };
+
+class ControlRequestError extends Error {
+  constructor(
+    readonly code: string,
+    message: string
+  ) {
+    super(message);
+    this.name = "ControlRequestError";
+  }
+}
 
 function controlWebSocketURLForPage() {
   if (window.location.protocol === "https:") {
@@ -80,6 +98,40 @@ function readMacStatus(value: unknown): MacStatus {
   };
 }
 
+function readMusicStatus(value: unknown): MusicStatus {
+  if (!value || typeof value !== "object") {
+    throw new Error("The Mac returned an invalid Apple Music status.");
+  }
+
+  const status = value as Record<string, unknown>;
+  return {
+    running: status.running === true,
+    playbackState:
+      typeof status.playbackState === "string" ? status.playbackState : "unknown",
+    title: typeof status.title === "string" ? status.title : "",
+    artist: typeof status.artist === "string" ? status.artist : "",
+    album: typeof status.album === "string" ? status.album : "",
+  };
+}
+
+function musicErrorMessage(error: unknown) {
+  if (error instanceof ControlRequestError) {
+    switch (error.code) {
+      case "musicNotRunning":
+        return "Open Music on your Mac.";
+      case "musicPermissionDenied":
+        return "Music control permission is required on the Mac.";
+      case "musicUnavailable":
+        return "Apple Music control is unavailable on the Mac.";
+      default:
+        return error.message;
+    }
+  }
+  return error instanceof Error
+    ? error.message
+    : "Apple Music could not be controlled from the Mac.";
+}
+
 export function useRemoteControl() {
   const socketRef = useRef<WebSocket | null>(null);
   const pendingRequestsRef = useRef(new Map<string, PendingRequest>());
@@ -87,6 +139,9 @@ export function useRemoteControl() {
   const connectionGenerationRef = useRef(0);
   const authenticatedRef = useRef(false);
   const processingCommandRef = useRef<"starting" | "stopping" | null>(null);
+  const musicCommandRef = useRef<
+    "refresh" | "playPause" | "previous" | "next" | null
+  >(null);
 
   const [controlURL, setControlURL] = useState("");
   const [connectionState, setConnectionState] =
@@ -97,6 +152,11 @@ export function useRemoteControl() {
   const [controlError, setControlError] = useState<string | null>(null);
   const [processingCommand, setProcessingCommand] = useState<
     "starting" | "stopping" | null
+  >(null);
+  const [musicStatus, setMusicStatus] = useState<MusicStatus | null>(null);
+  const [musicError, setMusicError] = useState<string | null>(null);
+  const [musicCommand, setMusicCommand] = useState<
+    "refresh" | "playPause" | "previous" | "next" | null
   >(null);
 
   const rejectPendingRequests = useCallback((message: string) => {
@@ -191,6 +251,69 @@ export function useRemoteControl() {
     [runProcessingCommand]
   );
 
+  const requestMusicStatus = useCallback(async () => {
+    const result = await sendRequest("musicStatus");
+    const status = readMusicStatus(result);
+    setMusicStatus(status);
+    return status;
+  }, [sendRequest]);
+
+  const refreshMusicStatus = useCallback(async () => {
+    if (musicCommandRef.current) return;
+
+    musicCommandRef.current = "refresh";
+    setMusicCommand("refresh");
+    setMusicError(null);
+    try {
+      await requestMusicStatus();
+    } catch (error) {
+      setMusicStatus(null);
+      setMusicError(musicErrorMessage(error));
+    } finally {
+      musicCommandRef.current = null;
+      setMusicCommand(null);
+    }
+  }, [requestMusicStatus]);
+
+  const runMusicCommand = useCallback(
+    async (
+      command: "musicPlayPause" | "musicPrevious" | "musicNext",
+      pendingState: "playPause" | "previous" | "next"
+    ) => {
+      if (musicCommandRef.current) return;
+
+      musicCommandRef.current = pendingState;
+      setMusicCommand(pendingState);
+      setMusicError(null);
+      try {
+        await sendRequest(command);
+        await requestMusicStatus();
+      } catch (error) {
+        setMusicStatus(null);
+        setMusicError(musicErrorMessage(error));
+      } finally {
+        musicCommandRef.current = null;
+        setMusicCommand(null);
+      }
+    },
+    [requestMusicStatus, sendRequest]
+  );
+
+  const musicPlayPause = useCallback(
+    () => runMusicCommand("musicPlayPause", "playPause"),
+    [runMusicCommand]
+  );
+
+  const musicPrevious = useCallback(
+    () => runMusicCommand("musicPrevious", "previous"),
+    [runMusicCommand]
+  );
+
+  const musicNext = useCallback(
+    () => runMusicCommand("musicNext", "next"),
+    [runMusicCommand]
+  );
+
   const connect = useCallback(
     (token: string) => {
       const trimmedToken = token.trim();
@@ -207,6 +330,8 @@ export function useRemoteControl() {
       setAuthenticated(false);
       setMacStatus(null);
       setControlError(null);
+      setMusicStatus(null);
+      setMusicError(null);
       setConnectionState("connecting");
 
       const targetURL = controlWebSocketURLForPage();
@@ -248,7 +373,10 @@ export function useRemoteControl() {
           setAuthenticated(true);
           setConnectionState("authenticated");
           void sendRequest("status")
-            .then((result) => setMacStatus(readMacStatus(result)))
+            .then((result) => {
+              setMacStatus(readMacStatus(result));
+              void refreshMusicStatus();
+            })
             .catch((error) =>
               setControlError(
                 error instanceof Error
@@ -270,7 +398,8 @@ export function useRemoteControl() {
           pending.resolve(response.result);
         } else {
           pending.reject(
-            new Error(
+            new ControlRequestError(
+              response.error?.code || "controlRequestFailed",
               response.error?.message || "The Mac rejected the control request."
             )
           );
@@ -289,6 +418,7 @@ export function useRemoteControl() {
         authenticatedRef.current = false;
         setAuthenticated(false);
         setMacStatus(null);
+        setMusicStatus(null);
         setConnectionState("disconnected");
         rejectPendingRequests("The Mac remote connection closed.");
         if (!wasAuthenticated) {
@@ -298,7 +428,7 @@ export function useRemoteControl() {
         }
       };
     },
-    [rejectPendingRequests, sendRequest]
+    [refreshMusicStatus, rejectPendingRequests, sendRequest]
   );
 
   const pairMac = useCallback(
@@ -326,6 +456,8 @@ export function useRemoteControl() {
     setAuthenticated(false);
     setMacStatus(null);
     setControlError(null);
+    setMusicStatus(null);
+    setMusicError(null);
     setConnectionState("disconnected");
   }, [rejectPendingRequests]);
 
@@ -355,10 +487,17 @@ export function useRemoteControl() {
     macStatus,
     controlError,
     processingCommand,
+    musicStatus,
+    musicError,
+    musicCommand,
     pairMac,
     refreshStatus,
     startProcessing,
     stopProcessing,
+    refreshMusicStatus,
+    musicPlayPause,
+    musicPrevious,
+    musicNext,
     forgetPairedMac,
   };
 }
