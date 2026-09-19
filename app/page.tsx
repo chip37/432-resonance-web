@@ -391,10 +391,10 @@ export default function Home() {
     : isConnecting
       ? "Connecting…"
       : isStreamOffline
-        ? "Reconnect"
+        ? "Reconnect Audio"
         : hasBrowserError
           ? "Try Again"
-          : "Connect";
+          : "Connect Audio";
 
   return (
     <main>
@@ -504,6 +504,30 @@ export default function Home() {
               {remoteControl.macStatus?.notReadyReason && (
                 <p className="remote-message">{remoteControl.macStatus.notReadyReason.message}</p>
               )}
+              <button
+                className="secondary-button"
+                type="button"
+                onClick={() => {
+                  if (remoteControl.macStatus?.processing) {
+                    void remoteControl.stopProcessing();
+                  } else {
+                    void remoteControl.startProcessing();
+                  }
+                }}
+                disabled={
+                  remoteControl.processingCommand !== null ||
+                  !remoteControl.macStatus ||
+                  (!remoteControl.macStatus.processing && !remoteControl.macStatus.ready)
+                }
+              >
+                {remoteControl.processingCommand === "starting"
+                  ? "Starting…"
+                  : remoteControl.processingCommand === "stopping"
+                    ? "Stopping…"
+                    : remoteControl.macStatus?.processing
+                      ? "Stop Processing"
+                      : "Start Processing"}
+              </button>
               <div className="remote-actions">
                 <button
                   className="secondary-button"

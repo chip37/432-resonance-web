@@ -39,7 +39,6 @@ type ControlResponse = {
 };
 
 type PendingRequest = {
-  command: string;
   resolve: (result: unknown) => void;
   reject: (error: Error) => void;
   timeout: ReturnType<typeof setTimeout>;
@@ -87,6 +86,7 @@ export function useRemoteControl() {
   const requestSequenceRef = useRef(0);
   const connectionGenerationRef = useRef(0);
   const authenticatedRef = useRef(false);
+  const processingCommandRef = useRef<"starting" | "stopping" | null>(null);
 
   const [controlURL, setControlURL] = useState("");
   const [connectionState, setConnectionState] =
@@ -95,6 +95,9 @@ export function useRemoteControl() {
   const [authenticated, setAuthenticated] = useState(false);
   const [macStatus, setMacStatus] = useState<MacStatus | null>(null);
   const [controlError, setControlError] = useState<string | null>(null);
+  const [processingCommand, setProcessingCommand] = useState<
+    "starting" | "stopping" | null
+  >(null);
 
   const rejectPendingRequests = useCallback((message: string) => {
     for (const request of pendingRequestsRef.current.values()) {
@@ -130,10 +133,7 @@ export function useRemoteControl() {
           reject(new Error("The Mac did not respond within 10 seconds."));
         }, REQUEST_TIMEOUT_MS);
 
-        pendingRequestsRef.current.set(id, { command, resolve, reject, timeout });
-        if (command === "status") {
-          console.log(`Remote control: status sent id=${id}`);
-        }
+        pendingRequestsRef.current.set(id, { resolve, reject, timeout });
         socket.send(JSON.stringify({ version: 1, id, command }));
       });
     },
@@ -152,6 +152,45 @@ export function useRemoteControl() {
     }
   }, [sendRequest]);
 
+  const runProcessingCommand = useCallback(
+    async (command: "startProcessing" | "stopProcessing") => {
+      if (processingCommandRef.current) return;
+
+      const pendingState = command === "startProcessing" ? "starting" : "stopping";
+      processingCommandRef.current = pendingState;
+      setProcessingCommand(pendingState);
+      setControlError(null);
+
+      try {
+        await sendRequest(command);
+        const status = await sendRequest("status");
+        setMacStatus(readMacStatus(status));
+      } catch (error) {
+        setControlError(
+          error instanceof Error
+            ? error.message
+            : command === "startProcessing"
+              ? "Could not start Processing on the Mac."
+              : "Could not stop Processing on the Mac."
+        );
+      } finally {
+        processingCommandRef.current = null;
+        setProcessingCommand(null);
+      }
+    },
+    [sendRequest]
+  );
+
+  const startProcessing = useCallback(
+    () => runProcessingCommand("startProcessing"),
+    [runProcessingCommand]
+  );
+
+  const stopProcessing = useCallback(
+    () => runProcessingCommand("stopProcessing"),
+    [runProcessingCommand]
+  );
+
   const connect = useCallback(
     (token: string) => {
       const trimmedToken = token.trim();
@@ -162,10 +201,7 @@ export function useRemoteControl() {
 
       connectionGenerationRef.current += 1;
       const generation = connectionGenerationRef.current;
-      if (socketRef.current) {
-        console.log("Remote control: explicit close cause=replacement");
-        socketRef.current.close();
-      }
+      socketRef.current?.close();
       rejectPendingRequests("The Mac remote connection was replaced.");
       authenticatedRef.current = false;
       setAuthenticated(false);
@@ -176,15 +212,12 @@ export function useRemoteControl() {
       const targetURL = controlWebSocketURLForPage();
       setControlURL(targetURL);
       const socket = new WebSocket(targetURL);
-      console.log(`Remote control: socket created generation=${generation}`);
       socketRef.current = socket;
 
       socket.onopen = () => {
         if (connectionGenerationRef.current !== generation) return;
-        console.log(`Remote control: onopen generation=${generation}`);
         setConnectionState("authenticating");
         socket.send(JSON.stringify({ type: "authenticate", token: trimmedToken }));
-        console.log("Remote control: authentication sent");
       };
 
       socket.onmessage = (event) => {
@@ -211,7 +244,6 @@ export function useRemoteControl() {
           object.version === 1 &&
           object.type === "authenticated"
         ) {
-          console.log("Remote control: authenticated received");
           authenticatedRef.current = true;
           setAuthenticated(true);
           setConnectionState("authenticated");
@@ -231,9 +263,6 @@ export function useRemoteControl() {
         if (typeof response.id !== "string") return;
         const pending = pendingRequestsRef.current.get(response.id);
         if (!pending) return;
-        if (pending.command === "status") {
-          console.log(`Remote control: status response received id=${response.id}`);
-        }
         clearTimeout(pending.timeout);
         pendingRequestsRef.current.delete(response.id);
 
@@ -250,16 +279,12 @@ export function useRemoteControl() {
 
       socket.onerror = () => {
         if (connectionGenerationRef.current !== generation) return;
-        console.log(`Remote control: onerror generation=${generation}`);
         setConnectionState("error");
         setControlError("Could not connect to 432 Resonance on your Mac.");
       };
 
-      socket.onclose = (event) => {
+      socket.onclose = () => {
         if (connectionGenerationRef.current !== generation) return;
-        console.log(
-          `Remote control: onclose generation=${generation} code=${event.code} reason=${event.reason} clean=${event.wasClean}`
-        );
         const wasAuthenticated = authenticatedRef.current;
         authenticatedRef.current = false;
         setAuthenticated(false);
@@ -293,10 +318,7 @@ export function useRemoteControl() {
   const forgetPairedMac = useCallback(() => {
     connectionGenerationRef.current += 1;
     localStorage.removeItem(PAIRING_TOKEN_STORAGE_KEY);
-    if (socketRef.current) {
-      console.log("Remote control: explicit close cause=forget");
-      socketRef.current.close();
-    }
+    socketRef.current?.close();
     socketRef.current = null;
     authenticatedRef.current = false;
     rejectPendingRequests("The paired Mac was forgotten.");
@@ -308,9 +330,7 @@ export function useRemoteControl() {
   }, [rejectPendingRequests]);
 
   useEffect(() => {
-    console.log("Remote control: effect setup");
     const targetURL = controlWebSocketURLForPage();
-    console.log(`Remote control: selected URL=${targetURL}`);
     setControlURL(targetURL);
     const storedToken = localStorage.getItem(PAIRING_TOKEN_STORAGE_KEY);
     if (storedToken) {
@@ -319,14 +339,8 @@ export function useRemoteControl() {
     }
 
     return () => {
-      console.log(
-        `Remote control: effect cleanup generation=${connectionGenerationRef.current}`
-      );
       connectionGenerationRef.current += 1;
-      if (socketRef.current) {
-        console.log("Remote control: explicit close cause=unmount");
-        socketRef.current.close();
-      }
+      socketRef.current?.close();
       socketRef.current = null;
       authenticatedRef.current = false;
       rejectPendingRequests("The Mac remote was closed.");
@@ -340,8 +354,11 @@ export function useRemoteControl() {
     authenticated,
     macStatus,
     controlError,
+    processingCommand,
     pairMac,
     refreshStatus,
+    startProcessing,
+    stopProcessing,
     forgetPairedMac,
   };
 }
