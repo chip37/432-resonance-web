@@ -130,6 +130,13 @@ function browserIsLittleEndian() {
   return bytes[0] === 1;
 }
 
+function formatMusicDuration(duration: number) {
+  const totalSeconds = Math.max(0, Math.round(duration));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = String(totalSeconds % 60).padStart(2, "0");
+  return `${minutes}:${seconds}`;
+}
+
 export default function Home() {
   const socketRef = useRef<WebSocket | null>(null);
   const userInitiatedStopRef = useRef(false);
@@ -144,6 +151,7 @@ export default function Home() {
   const [diagnostics, setDiagnostics] = useState(initialDiagnostics);
   const [message, setMessage] = useState("Ready to connect.");
   const [pairingTokenInput, setPairingTokenInput] = useState("");
+  const [musicSearchQuery, setMusicSearchQuery] = useState("");
   const remoteControl = useRemoteControl();
 
   useEffect(() => {
@@ -674,6 +682,76 @@ export default function Home() {
                 {remoteControl.musicError && (
                   <p className="remote-error" role="alert">{remoteControl.musicError}</p>
                 )}
+
+                <div className="music-library-search">
+                  <h4>Search Your Music Library</h4>
+                  <form
+                    className="music-search-form"
+                    onSubmit={(event) => {
+                      event.preventDefault();
+                      void remoteControl.musicSearch(musicSearchQuery);
+                    }}
+                  >
+                    <input
+                      type="search"
+                      value={musicSearchQuery}
+                      onChange={(event) => setMusicSearchQuery(event.target.value)}
+                      placeholder="Song title or artist"
+                      maxLength={256}
+                      autoComplete="off"
+                    />
+                    <button
+                      className="secondary-button"
+                      type="submit"
+                      disabled={
+                        remoteControl.musicSearchPending ||
+                        remoteControl.musicPlayTrackPendingID !== null ||
+                        !musicSearchQuery.trim()
+                      }
+                    >
+                      {remoteControl.musicSearchPending ? "Searching…" : "Search"}
+                    </button>
+                  </form>
+
+                  {remoteControl.musicSearchMessage && (
+                    <p className="music-search-message">{remoteControl.musicSearchMessage}</p>
+                  )}
+                  {remoteControl.musicSearchError && (
+                    <p className="remote-error" role="alert">{remoteControl.musicSearchError}</p>
+                  )}
+
+                  {remoteControl.musicSearchResults.length > 0 && (
+                    <div className="music-search-results">
+                      {remoteControl.musicSearchResults.map((result) => (
+                        <article className="music-search-result" key={result.persistentID}>
+                          <div>
+                            <h5>{result.title}</h5>
+                            <p>{result.artist}</p>
+                            <p>{result.album}</p>
+                            {result.duration !== undefined && (
+                              <p className="music-duration">
+                                {formatMusicDuration(result.duration)}
+                              </p>
+                            )}
+                          </div>
+                          <button
+                            className="secondary-button"
+                            type="button"
+                            onClick={() => void remoteControl.musicPlayTrack(result.persistentID)}
+                            disabled={
+                              remoteControl.musicSearchPending ||
+                              remoteControl.musicPlayTrackPendingID !== null
+                            }
+                          >
+                            {remoteControl.musicPlayTrackPendingID === result.persistentID
+                              ? "Playing…"
+                              : "Play"}
+                          </button>
+                        </article>
+                      ))}
+                    </div>
+                  )}
+                </div>
               </section>
             </div>
           )}

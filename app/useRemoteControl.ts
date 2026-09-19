@@ -35,6 +35,14 @@ export type MusicStatus = {
   album: string;
 };
 
+export type MusicSearchResult = {
+  persistentID: string;
+  title: string;
+  artist: string;
+  album: string;
+  duration?: number;
+};
+
 type ControlResponse = {
   version: number;
   id: string;
@@ -114,6 +122,42 @@ function readMusicStatus(value: unknown): MusicStatus {
   };
 }
 
+function readMusicSearchResponse(value: unknown) {
+  if (!value || typeof value !== "object") {
+    throw new Error("The Mac returned an invalid Music library response.");
+  }
+
+  const response = value as Record<string, unknown>;
+  if (!Array.isArray(response.results)) {
+    throw new Error("The Mac returned invalid Music library results.");
+  }
+
+  const results = response.results.map((value): MusicSearchResult => {
+    if (!value || typeof value !== "object") {
+      throw new Error("The Mac returned an invalid Music library result.");
+    }
+    const result = value as Record<string, unknown>;
+    if (typeof result.persistentID !== "string" || !result.persistentID) {
+      throw new Error("The Mac returned a Music result without an identifier.");
+    }
+    return {
+      persistentID: result.persistentID,
+      title: typeof result.title === "string" ? result.title : "Unknown title",
+      artist: typeof result.artist === "string" ? result.artist : "Unknown artist",
+      album: typeof result.album === "string" ? result.album : "Unknown album",
+      duration:
+        typeof result.duration === "number" && Number.isFinite(result.duration)
+          ? result.duration
+          : undefined,
+    };
+  });
+
+  return {
+    results,
+    message: typeof response.message === "string" ? response.message : null,
+  };
+}
+
 function musicErrorMessage(error: unknown) {
   if (error instanceof ControlRequestError) {
     switch (error.code) {
@@ -123,6 +167,10 @@ function musicErrorMessage(error: unknown) {
         return "Music control permission is required on the Mac.";
       case "musicUnavailable":
         return "Apple Music control is unavailable on the Mac.";
+      case "musicTrackUnavailable":
+        return "That track is no longer available in your Music library.";
+      case "invalidArguments":
+        return "The Music library request was invalid. Check your search and try again.";
       default:
         return error.message;
     }
@@ -142,6 +190,8 @@ export function useRemoteControl() {
   const musicCommandRef = useRef<
     "refresh" | "playPause" | "previous" | "next" | null
   >(null);
+  const musicSearchPendingRef = useRef(false);
+  const musicPlayTrackPendingRef = useRef<string | null>(null);
 
   const [controlURL, setControlURL] = useState("");
   const [connectionState, setConnectionState] =
@@ -158,6 +208,11 @@ export function useRemoteControl() {
   const [musicCommand, setMusicCommand] = useState<
     "refresh" | "playPause" | "previous" | "next" | null
   >(null);
+  const [musicSearchResults, setMusicSearchResults] = useState<MusicSearchResult[]>([]);
+  const [musicSearchPending, setMusicSearchPending] = useState(false);
+  const [musicSearchMessage, setMusicSearchMessage] = useState<string | null>(null);
+  const [musicSearchError, setMusicSearchError] = useState<string | null>(null);
+  const [musicPlayTrackPendingID, setMusicPlayTrackPendingID] = useState<string | null>(null);
 
   const rejectPendingRequests = useCallback((message: string) => {
     for (const request of pendingRequestsRef.current.values()) {
@@ -176,7 +231,7 @@ export function useRemoteControl() {
   }, []);
 
   const sendRequest = useCallback(
-    (command: string) => {
+    (command: string, fields: Record<string, unknown> = {}) => {
       const socket = socketRef.current;
       if (
         !socket ||
@@ -194,7 +249,7 @@ export function useRemoteControl() {
         }, REQUEST_TIMEOUT_MS);
 
         pendingRequestsRef.current.set(id, { resolve, reject, timeout });
-        socket.send(JSON.stringify({ version: 1, id, command }));
+        socket.send(JSON.stringify({ version: 1, id, command, ...fields }));
       });
     },
     [nextRequestID]
@@ -314,6 +369,69 @@ export function useRemoteControl() {
     [runMusicCommand]
   );
 
+  const musicSearch = useCallback(
+    async (query: string) => {
+      if (musicSearchPendingRef.current) return;
+
+      const trimmedQuery = query.trim();
+      if (!trimmedQuery) {
+        setMusicSearchError("Enter a song title or artist.");
+        return;
+      }
+      if (trimmedQuery.length > 256) {
+        setMusicSearchError("Search text must be 256 characters or fewer.");
+        return;
+      }
+
+      musicSearchPendingRef.current = true;
+      setMusicSearchPending(true);
+      setMusicSearchError(null);
+      setMusicSearchMessage(null);
+      try {
+        const response = await sendRequest("musicSearch", { query: trimmedQuery });
+        const search = readMusicSearchResponse(response);
+        setMusicSearchResults(search.results);
+        setMusicSearchMessage(
+          search.message ||
+            (search.results.length === 0
+              ? "No songs found in your Music library."
+              : null)
+        );
+      } catch (error) {
+        setMusicSearchError(musicErrorMessage(error));
+      } finally {
+        musicSearchPendingRef.current = false;
+        setMusicSearchPending(false);
+      }
+    },
+    [sendRequest]
+  );
+
+  const musicPlayTrack = useCallback(
+    async (persistentID: string) => {
+      if (musicPlayTrackPendingRef.current) return;
+
+      if (typeof persistentID !== "string" || !persistentID) {
+        setMusicSearchError("That Music library result is invalid.");
+        return;
+      }
+
+      musicPlayTrackPendingRef.current = persistentID;
+      setMusicPlayTrackPendingID(persistentID);
+      setMusicSearchError(null);
+      try {
+        await sendRequest("musicPlayTrack", { persistentID });
+        await requestMusicStatus();
+      } catch (error) {
+        setMusicSearchError(musicErrorMessage(error));
+      } finally {
+        musicPlayTrackPendingRef.current = null;
+        setMusicPlayTrackPendingID(null);
+      }
+    },
+    [requestMusicStatus, sendRequest]
+  );
+
   const connect = useCallback(
     (token: string) => {
       const trimmedToken = token.trim();
@@ -332,6 +450,9 @@ export function useRemoteControl() {
       setControlError(null);
       setMusicStatus(null);
       setMusicError(null);
+      setMusicSearchResults([]);
+      setMusicSearchMessage(null);
+      setMusicSearchError(null);
       setConnectionState("connecting");
 
       const targetURL = controlWebSocketURLForPage();
@@ -419,6 +540,9 @@ export function useRemoteControl() {
         setAuthenticated(false);
         setMacStatus(null);
         setMusicStatus(null);
+        setMusicSearchResults([]);
+        setMusicSearchMessage(null);
+        setMusicSearchError(null);
         setConnectionState("disconnected");
         rejectPendingRequests("The Mac remote connection closed.");
         if (!wasAuthenticated) {
@@ -458,6 +582,9 @@ export function useRemoteControl() {
     setControlError(null);
     setMusicStatus(null);
     setMusicError(null);
+    setMusicSearchResults([]);
+    setMusicSearchMessage(null);
+    setMusicSearchError(null);
     setConnectionState("disconnected");
   }, [rejectPendingRequests]);
 
@@ -490,6 +617,11 @@ export function useRemoteControl() {
     musicStatus,
     musicError,
     musicCommand,
+    musicSearchResults,
+    musicSearchPending,
+    musicSearchMessage,
+    musicSearchError,
+    musicPlayTrackPendingID,
     pairMac,
     refreshStatus,
     startProcessing,
@@ -498,6 +630,8 @@ export function useRemoteControl() {
     musicPlayPause,
     musicPrevious,
     musicNext,
+    musicSearch,
+    musicPlayTrack,
     forgetPairedMac,
   };
 }

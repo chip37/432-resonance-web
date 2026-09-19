@@ -357,6 +357,90 @@ summary {
   font-size: 0.86rem;
 }
 
+.music-library-search {
+  display: grid;
+  gap: 12px;
+  margin-top: 8px;
+  padding-top: 20px;
+  border-top: 1px solid rgba(159, 181, 255, 0.14);
+}
+
+.music-library-search h4,
+.music-search-result h5 {
+  margin: 0;
+}
+
+.music-library-search h4 {
+  font-size: 0.98rem;
+}
+
+.music-search-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.music-search-form input {
+  box-sizing: border-box;
+  min-width: 0;
+  min-height: 48px;
+  padding: 0 13px;
+  border: 1px solid rgba(159, 181, 255, 0.24);
+  border-radius: 13px;
+  outline: none;
+  color: #f7f9ff;
+  background: rgba(3, 6, 14, 0.65);
+  font: inherit;
+}
+
+.music-search-form input:focus {
+  border-color: #78e7d2;
+  box-shadow: 0 0 0 3px rgba(120, 231, 210, 0.12);
+}
+
+.music-search-message {
+  color: #aeb9d1;
+  font-size: 0.9rem;
+  line-height: 1.45;
+}
+
+.music-search-results {
+  display: grid;
+  gap: 10px;
+}
+
+.music-search-result {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 13px;
+  border-radius: 14px;
+  background: rgba(3, 6, 14, 0.45);
+}
+
+.music-search-result h5 {
+  font-size: 0.96rem;
+  line-height: 1.35;
+}
+
+.music-search-result p {
+  margin-top: 2px;
+  color: #9ca9c5;
+  font-size: 0.84rem;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.music-search-result .music-duration {
+  color: #77839d;
+  font-size: 0.78rem;
+}
+
+.music-search-result .secondary-button {
+  min-height: 44px;
+}
+
 .remote-message,
 .remote-error {
   padding: 12px 14px;
@@ -397,6 +481,10 @@ summary {
 
   .music-transport {
     gap: 6px;
+  }
+
+  .music-search-form {
+    grid-template-columns: 1fr;
   }
 }
 
