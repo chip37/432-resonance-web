@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { useRemoteControl } from "./useRemoteControl";
 
 const EXPECTED_STREAM_SAMPLE_RATE = 44_100;
 const PRODUCTION_WEBSOCKET_URL =
@@ -119,6 +120,7 @@ function browserIsLittleEndian() {
 
 export default function Home() {
   const socketRef = useRef<WebSocket | null>(null);
+  const userInitiatedStopRef = useRef(false);
   const contextRef = useRef<AudioContext | null>(null);
   const workletRef = useRef<AudioWorkletNode | null>(null);
   const scriptProcessorRef = useRef<ScriptProcessorNode | null>(null);
@@ -128,6 +130,8 @@ export default function Home() {
   const [websocketURL, setWebsocketURL] = useState("");
   const [diagnostics, setDiagnostics] = useState(initialDiagnostics);
   const [message, setMessage] = useState("Ready to connect.");
+  const [pairingTokenInput, setPairingTokenInput] = useState("");
+  const remoteControl = useRemoteControl();
 
   useEffect(() => {
     setWebsocketURL(websocketURLForPage());
@@ -136,6 +140,7 @@ export default function Home() {
       secureContext: window.isSecureContext,
     }));
     return () => {
+      userInitiatedStopRef.current = true;
       socketRef.current?.close();
       workletRef.current?.disconnect();
       scriptProcessorRef.current?.disconnect();
@@ -144,6 +149,7 @@ export default function Home() {
   }, []);
 
   async function stop() {
+    userInitiatedStopRef.current = true;
     socketRef.current?.close();
     socketRef.current = null;
     workletRef.current?.disconnect();
@@ -248,6 +254,7 @@ export default function Home() {
       const socket = new WebSocket(targetURL);
       socket.binaryType = "arraybuffer";
       socketRef.current = socket;
+      userInitiatedStopRef.current = false;
 
       socket.onopen = () => {
         setDiagnostics((current) => ({ ...current, connectionState: "connected" }));
@@ -316,6 +323,7 @@ export default function Home() {
       };
 
       socket.onclose = () => {
+        if (userInitiatedStopRef.current) return;
         setDiagnostics((current) => ({
           ...current,
           connectionState: current.connectionState === "error" ? "error" : "closed",
@@ -328,27 +336,198 @@ export default function Home() {
     }
   }
 
+  const isPlaying =
+    diagnostics.connectionState === "connected" &&
+    diagnostics.receivedFrames > 0;
+  const isConnected = diagnostics.connectionState === "connected";
+  const isConnecting = diagnostics.connectionState === "connecting";
+  const isStreamOffline =
+    (diagnostics.connectionState === "closed" && message === "Connection closed.") ||
+    (diagnostics.connectionState === "error" &&
+      message.startsWith("WebSocket connection failed"));
+  const hasBrowserError =
+    diagnostics.connectionState === "error" && !isStreamOffline;
+
+  const status = isPlaying
+    ? {
+        key: "playing",
+        title: "Playing",
+        description: "Receiving processed 432 Hz audio",
+      }
+    : isConnected
+      ? {
+          key: "connected",
+          title: "Connected",
+          description: "Waiting for processed audio…",
+        }
+      : isConnecting
+        ? {
+            key: "connecting",
+            title: "Connecting",
+            description: "Reaching your 432 Resonance stream…",
+          }
+        : isStreamOffline
+          ? {
+              key: "offline",
+              title: "Stream Offline",
+              description: "Start Processing on your Mac, then try again.",
+            }
+          : hasBrowserError
+            ? {
+                key: "error",
+                title: "Error",
+                description:
+                  "Unable to start browser audio. Check your browser volume and try again.",
+              }
+            : {
+                key: "ready",
+                title: "Ready to connect",
+                description: "Listen to your processed audio from this device.",
+              };
+
+  const shouldStop = isConnected;
+  const buttonLabel = shouldStop
+    ? "Stop"
+    : isConnecting
+      ? "Connecting…"
+      : isStreamOffline
+        ? "Reconnect"
+        : hasBrowserError
+          ? "Try Again"
+          : "Connect";
+
   return (
     <main>
-      <h1>432 Resonance Local Player</h1>
-      <p>Processed audio from <code>{websocketURL || "Determining page host…"}</code></p>
+      <div className="player-card">
+        <header>
+          <div className="brand-mark" aria-hidden="true">432</div>
+          <div>
+            <h1>432 Resonance</h1>
+            <p className="eyebrow">Remote Player</p>
+          </div>
+        </header>
 
-      <div className="controls">
-        <button onClick={connectAndPlay} disabled={!websocketURL || diagnostics.connectionState === "connecting" || diagnostics.connectionState === "connected"}>
-          Connect / Play
+        <section className={`status-panel status-${status.key}`} aria-live="polite">
+          <div className="status-heading">
+            <span className="status-dot" aria-hidden="true" />
+            <h2>{status.title}</h2>
+          </div>
+          <p>{status.description}</p>
+        </section>
+
+        <button
+          className="primary-button"
+          onClick={shouldStop ? stop : connectAndPlay}
+          disabled={!websocketURL || isConnecting}
+        >
+          {buttonLabel}
         </button>
-        <button onClick={stop} disabled={diagnostics.connectionState === "closed"}>
-          Stop
-        </button>
+
+        <details>
+          <summary>Technical details</summary>
+          <div className="diagnostics">
+            <p><code>websocketURL=</code>{websocketURL || "unavailable"}</p>
+            {(Object.keys(diagnostics) as Array<keyof Diagnostics>).map((key) => (
+              <p key={key}><code>{key}=</code>{String(diagnostics[key])}</p>
+            ))}
+            <p><code>lastMessage=</code>{message}</p>
+          </div>
+        </details>
+
+        <section className="remote-control-section" aria-labelledby="remote-control-title">
+          <div className="section-heading">
+            <div>
+              <p className="section-label">Mac status</p>
+              <h2 id="remote-control-title">Remote Control</h2>
+            </div>
+            <span
+              className={`connection-badge ${remoteControl.authenticated ? "is-connected" : ""}`}
+            >
+              {remoteControl.authenticated ? "Mac Connected" : "Mac Disconnected"}
+            </span>
+          </div>
+
+          {!remoteControl.authenticated ? (
+            <form
+              className="pairing-form"
+              onSubmit={(event) => {
+                event.preventDefault();
+                remoteControl.pairMac(pairingTokenInput);
+                setPairingTokenInput("");
+              }}
+            >
+              <label htmlFor="pairing-token">Pairing token</label>
+              <input
+                id="pairing-token"
+                type="password"
+                value={pairingTokenInput}
+                onChange={(event) => setPairingTokenInput(event.target.value)}
+                autoComplete="off"
+                spellCheck={false}
+                placeholder={remoteControl.hasPairingToken ? "Enter a new token to retry" : "Paste token from the Mac app"}
+                disabled={
+                  remoteControl.connectionState === "connecting" ||
+                  remoteControl.connectionState === "authenticating"
+                }
+              />
+              <button
+                className="secondary-button"
+                type="submit"
+                disabled={
+                  !pairingTokenInput.trim() ||
+                  remoteControl.connectionState === "connecting" ||
+                  remoteControl.connectionState === "authenticating"
+                }
+              >
+                {remoteControl.connectionState === "connecting" ||
+                remoteControl.connectionState === "authenticating"
+                  ? "Pairing…"
+                  : "Pair Mac"}
+              </button>
+              {remoteControl.hasPairingToken && (
+                <button
+                  className="text-button"
+                  type="button"
+                  onClick={remoteControl.forgetPairedMac}
+                >
+                  Forget saved pairing
+                </button>
+              )}
+            </form>
+          ) : (
+            <div className="remote-status">
+              <div className="status-grid">
+                <p><span>Readiness</span><strong>{remoteControl.macStatus?.ready ? "Ready" : "Not Ready"}</strong></p>
+                <p><span>Processing</span><strong>{remoteControl.macStatus?.processing ? "Processing" : "Stopped"}</strong></p>
+                <p><span>Output</span><strong>{remoteControl.macStatus?.activeOutput || "Unavailable"}</strong></p>
+              </div>
+              {remoteControl.macStatus?.notReadyReason && (
+                <p className="remote-message">{remoteControl.macStatus.notReadyReason.message}</p>
+              )}
+              <div className="remote-actions">
+                <button
+                  className="secondary-button"
+                  type="button"
+                  onClick={() => void remoteControl.refreshStatus()}
+                >
+                  Refresh Status
+                </button>
+                <button
+                  className="text-button"
+                  type="button"
+                  onClick={remoteControl.forgetPairedMac}
+                >
+                  Forget Paired Mac
+                </button>
+              </div>
+            </div>
+          )}
+
+          {remoteControl.controlError && (
+            <p className="remote-error" role="alert">{remoteControl.controlError}</p>
+          )}
+        </section>
       </div>
-
-      <p>{message}</p>
-      <section>
-        <p><code>websocketURL=</code>{websocketURL || "unavailable"}</p>
-        {(Object.keys(diagnostics) as Array<keyof Diagnostics>).map((key) => (
-          <p key={key}><code>{key}=</code>{diagnostics[key]}</p>
-        ))}
-      </section>
     </main>
   );
 }
