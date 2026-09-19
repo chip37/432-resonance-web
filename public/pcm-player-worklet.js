@@ -15,6 +15,8 @@ class PCMPlayerProcessor extends AudioWorkletProcessor {
     this.clientUnderflows = 0;
     this.clientDrops = 0;
     this.primed = false;
+    this.workletRenderCallbacks = 0;
+    this.outputPeakSinceLastReport = 0;
     this.reportCountdown = Math.ceil(sampleRate / 128 / 4);
 
     this.port.onmessage = (event) => {
@@ -51,6 +53,7 @@ class PCMPlayerProcessor extends AudioWorkletProcessor {
   }
 
   process(_inputs, outputs) {
+    this.workletRenderCallbacks += 1;
     const output = outputs[0];
     const leftOutput = output[0];
     const rightOutput = output[1];
@@ -66,9 +69,15 @@ class PCMPlayerProcessor extends AudioWorkletProcessor {
       if (framesToRead < requestedFrames) this.clientUnderflows += 1;
     }
 
+    let outputPeak = 0;
     for (let frame = 0; frame < framesToRead; frame += 1) {
       leftOutput[frame] = this.left[this.readIndex];
       rightOutput[frame] = this.right[this.readIndex];
+      outputPeak = Math.max(
+        outputPeak,
+        Math.abs(leftOutput[frame]),
+        Math.abs(rightOutput[frame])
+      );
       this.readIndex = (this.readIndex + 1) % this.capacity;
     }
     this.queuedFrames -= framesToRead;
@@ -77,6 +86,10 @@ class PCMPlayerProcessor extends AudioWorkletProcessor {
       leftOutput[frame] = 0;
       rightOutput[frame] = 0;
     }
+    this.outputPeakSinceLastReport = Math.max(
+      this.outputPeakSinceLastReport,
+      outputPeak
+    );
 
     this.reportCountdown -= 1;
     if (this.reportCountdown <= 0) {
@@ -85,7 +98,11 @@ class PCMPlayerProcessor extends AudioWorkletProcessor {
         queuedFrames: this.queuedFrames,
         clientUnderflows: this.clientUnderflows,
         clientDrops: this.clientDrops,
+        workletRenderCallbacks: this.workletRenderCallbacks,
+        workletOutputPeak: this.outputPeakSinceLastReport,
+        workletPrimed: this.primed,
       });
+      this.outputPeakSinceLastReport = 0;
       this.reportCountdown = Math.ceil(sampleRate / 128 / 4);
     }
     return true;

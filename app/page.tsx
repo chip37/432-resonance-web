@@ -26,12 +26,18 @@ type Diagnostics = {
   secureContext: boolean;
   audioWorkletAvailable: boolean;
   audioContextSampleRate: number;
+  audioContextState: string;
   sampleRate: number;
   channelCount: number;
   receivedFrames: number;
+  receivedPeak: number;
   queuedFrames: number;
   clientUnderflows: number;
   clientDrops: number;
+  workletRenderCallbacks: number;
+  workletOutputPeak: number;
+  workletPrimed: boolean;
+  workletProcessorError: string;
 };
 
 const initialDiagnostics: Diagnostics = {
@@ -39,12 +45,18 @@ const initialDiagnostics: Diagnostics = {
   secureContext: false,
   audioWorkletAvailable: false,
   audioContextSampleRate: 0,
+  audioContextState: "unavailable",
   sampleRate: 0,
   channelCount: 0,
   receivedFrames: 0,
+  receivedPeak: 0,
   queuedFrames: 0,
   clientUnderflows: 0,
   clientDrops: 0,
+  workletRenderCallbacks: 0,
+  workletOutputPeak: 0,
+  workletPrimed: false,
+  workletProcessorError: "none",
 };
 
 class BoundedStereoPCMQueue {
@@ -122,6 +134,7 @@ export default function Home() {
   const socketRef = useRef<WebSocket | null>(null);
   const userInitiatedStopRef = useRef(false);
   const contextRef = useRef<AudioContext | null>(null);
+  const contextStateChangeHandlerRef = useRef<(() => void) | null>(null);
   const workletRef = useRef<AudioWorkletNode | null>(null);
   const scriptProcessorRef = useRef<ScriptProcessorNode | null>(null);
   const enqueuePCMRef = useRef<((left: Float32Array, right: Float32Array) => void) | null>(null);
@@ -142,6 +155,14 @@ export default function Home() {
     return () => {
       userInitiatedStopRef.current = true;
       socketRef.current?.close();
+      if (contextRef.current && contextStateChangeHandlerRef.current) {
+        contextRef.current.removeEventListener(
+          "statechange",
+          contextStateChangeHandlerRef.current
+        );
+      }
+      contextStateChangeHandlerRef.current = null;
+      if (workletRef.current) workletRef.current.onprocessorerror = null;
       workletRef.current?.disconnect();
       scriptProcessorRef.current?.disconnect();
       void contextRef.current?.close();
@@ -152,6 +173,14 @@ export default function Home() {
     userInitiatedStopRef.current = true;
     socketRef.current?.close();
     socketRef.current = null;
+    if (contextRef.current && contextStateChangeHandlerRef.current) {
+      contextRef.current.removeEventListener(
+        "statechange",
+        contextStateChangeHandlerRef.current
+      );
+    }
+    contextStateChangeHandlerRef.current = null;
+    if (workletRef.current) workletRef.current.onprocessorerror = null;
     workletRef.current?.disconnect();
     workletRef.current = null;
     if (scriptProcessorRef.current) {
@@ -183,7 +212,17 @@ export default function Home() {
     try {
       const context = new AudioContext({ sampleRate: EXPECTED_STREAM_SAMPLE_RATE });
       contextRef.current = context;
+      const handleContextStateChange = () => {
+        setDiagnostics((current) => ({
+          ...current,
+          audioContextState: String(context.state),
+        }));
+      };
+      contextStateChangeHandlerRef.current = handleContextStateChange;
+      context.addEventListener("statechange", handleContextStateChange);
+      handleContextStateChange();
       await context.resume();
+      handleContextStateChange();
       const hasAudioWorklet = context.audioWorklet !== undefined;
       setDiagnostics((current) => ({
         ...current,
@@ -212,6 +251,15 @@ export default function Home() {
             queuedFrames: event.data.queuedFrames,
             clientUnderflows: event.data.clientUnderflows,
             clientDrops: event.data.clientDrops,
+            workletRenderCallbacks: event.data.workletRenderCallbacks,
+            workletOutputPeak: event.data.workletOutputPeak,
+            workletPrimed: event.data.workletPrimed,
+          }));
+        };
+        worklet.onprocessorerror = () => {
+          setDiagnostics((current) => ({
+            ...current,
+            workletProcessorError: "occurred",
           }));
         };
         workletRef.current = worklet;
@@ -304,15 +352,22 @@ export default function Home() {
 
         const left = new Float32Array(frameCount);
         const right = new Float32Array(frameCount);
+        let receivedPeak = 0;
         for (let frame = 0; frame < frameCount; frame += 1) {
           left[frame] = interleaved[frame * 2];
           right[frame] = interleaved[frame * 2 + 1];
+          receivedPeak = Math.max(
+            receivedPeak,
+            Math.abs(left[frame]),
+            Math.abs(right[frame])
+          );
         }
 
         receivedFramesRef.current += frameCount;
         setDiagnostics((current) => ({
           ...current,
           receivedFrames: receivedFramesRef.current,
+          receivedPeak,
         }));
         enqueuePCMRef.current?.(left, right);
       };
